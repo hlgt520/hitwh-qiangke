@@ -1,0 +1,15 @@
+# 编译产物
+*.exe
+qiangke.exe~
+
+# 敏感文件（含会话/账号信息，切勿提交）
+cookie.json
+account.json
+smscode.txt
+
+# 图片（二维码/验证码）
+*.png
+
+# 系统文件
+.DS_Store
+Thumbs.db
