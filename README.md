@@ -14,6 +14,48 @@
 
 > 说明：页面常驻「学生未进行注册，不可选课！」提示，含义是**选课尚未开放**；课表仍可正常查看，等选课开放、完成注册后提交即生效。
 
+## 环境配置（从源码构建）
+
+本工具是 Go 程序，构建/运行**只需安装 Go**，无其他运行时依赖。仓库里已附带编译好的 `qiangke.exe`，若只想直接用可跳过本节。
+
+### 1. 安装 Go
+
+- 官网下载：<https://go.dev/dl/>（国内可访问 <https://golang.google.cn/dl/>）
+- Windows 选 `.msi` 安装包，一路下一步即可（默认装到 `C:\Program Files\Go`）
+- 装完开新终端验证：
+
+```bash
+go version
+```
+
+### 2. 配置国内模块代理（重要）
+
+默认的 `proxy.golang.org` 在国内经常连不上，**必须先换成国内镜像**：
+
+```bash
+go env -w GOPROXY=https://goproxy.cn,direct
+```
+
+### 3. 拉取依赖并构建
+
+```bash
+cd qiangke
+go mod tidy                 # 自动下载依赖
+go build -o qiangke.exe .   # 编译成单文件 exe
+```
+
+编译完成后得到 `qiangke.exe`，双击即可运行。
+
+> 依赖说明：仅 `golang.org/x/net`（用于 GBK/GB2312 网页解码），其余全是 Go 标准库；`go.sum` 已锁定依赖版本。
+
+### 4. 从 GitHub 拉取（可选）
+
+```bash
+git clone https://github.com/hlgt520/hitwh-qiangke.git
+cd hitwh-qiangke
+# 然后按上面 2、3 步配置代理并构建
+```
+
 ## 设计要点（防冻结）
 
 - **登录一次、cookie 落盘复用**：`cookie.json`，再次运行直接复用，绝不重复登录。
