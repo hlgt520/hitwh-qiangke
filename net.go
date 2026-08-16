@@ -211,6 +211,10 @@ func loadCookies(c *http.Client, file string) (bool, error) {
 }
 
 func doLogout(c *http.Client) {
-	_, _, _, _, _ = doGet(c, logoutURL)
-	fmt.Println("[logout] 已尝试释放 CAS 会话")
+	_, status, _, _, err := doGet(c, logoutURL)
+	if err != nil {
+		fmt.Printf("[logout] 释放 CAS 会话失败: %v\n", err)
+		return
+	}
+	fmt.Printf("[logout] 已释放 CAS 会话 (HTTP %d)\n", status)
 }

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
@@ -437,6 +439,23 @@ func runWeb() {
 		setLoggedIn(true)
 	}
 	startKeepalive() // 登录后每 60 秒保活，避免会话过期
+
+	// 退出时尽力释放 CAS 会话（与 CLI 模式对齐），避免僵尸会话累积到冻结阈值：
+	// 1) Ctrl+C：Go 的 os/signal 可以捕获，先登出再退出；
+	// 2) 点窗口叉号：Windows 发 CTRL_CLOSE_EVENT，由 console_windows.go 的
+	//    SetConsoleCtrlHandler 在系统 5 秒宽限期内登出；唯一救不了的是
+	//    任务管理器/强制结束这类直接强杀，见该文件注释。
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
+	go func() {
+		<-stop
+		fmt.Println("\n[exit] 收到 Ctrl+C，释放 CAS 会话...")
+		doLogout(webClient)
+		os.Exit(0)
+	}()
+	setupConsoleCloseHandler(func() {
+		doLogout(webClient)
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleIndex)

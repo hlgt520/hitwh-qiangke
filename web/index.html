@@ -134,7 +134,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let pollTimer = null, qrTimer = null, loggedIn = false, triggerVal = '';
+let pollTimer = null, qrTimer = null, loggedIn = false, triggerVal = '', running = false;
 
 async function api(url, opts) {
   const r = await fetch(url, opts);
@@ -157,6 +157,7 @@ async function loadState() {
 }
 
 function renderGrab(s) {
+  running = !!s.running;
   const log = $('grab-log');
   log.textContent = s.log.length ? s.log.join('\n') : '暂无日志';
   log.scrollTop = log.scrollHeight;  // 自动滚动到最新
@@ -216,6 +217,14 @@ $('logout-btn').onclick = async () => {
   setBadge(false);
   $('course-tbody').innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center">请先登录</td></tr>';
 };
+
+// 关闭标签页/刷新页面时尽力登出（keepalive:true 允许请求在页面关闭瞬间发出）。
+// 抢课进行中不登出，避免把正在抢课的会话也断掉；页面关闭 ≠ 关闭脚本进程，
+// 脚本进程会继续存活，会话也保持有效，下次还能复用 cookie。
+window.addEventListener('pagehide', () => {
+  if (running) return;
+  fetch('/api/logout', {method:'POST', keepalive:true}).catch(() => {});
+});
 
 // —— 元数据 ——
 async function loadCourseTypes() {
@@ -277,6 +286,7 @@ $('grab-btn').onclick = async () => {
   try {
     await api('/api/grab', {method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({xnxq, targets:targets.map(t=>({xklb:t.xklb, rwh:t.rwh, name:t.name})), trigger:triggerVal})});
+    running = true;  // 立即置位，避免首次轮询(800ms)前关页面的竞态窗口触发登出
     $('grab-btn').disabled = true;
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
