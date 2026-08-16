@@ -31,7 +31,15 @@ type grabState struct {
 	running bool
 	done    bool
 	result  string
+	current string
+	results []grabResult
 	log     []string
+}
+
+type grabResult struct {
+	Name   string `json:"name"`
+	Result string `json:"result"`
+	Ok     bool   `json:"ok"`
 }
 
 func (s *grabState) addLog(format string, a ...interface{}) {
@@ -44,10 +52,11 @@ func (s *grabState) addLog(format string, a ...interface{}) {
 	}
 }
 
-func (s *grabState) snapshot() (running, done bool, result string, log []string) {
+func (s *grabState) snapshot() (running, done bool, result, current string, results []grabResult, log []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.running, s.done, s.result, append([]string(nil), s.log...)
+	resultsCopy := append([]grabResult(nil), s.results...)
+	return s.running, s.done, s.result, s.current, resultsCopy, append([]string(nil), s.log...)
 }
 
 func setLoggedIn(v bool) {
@@ -84,12 +93,14 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 // —— 会话状态 ——
 func handleState(w http.ResponseWriter, r *http.Request) {
-	running, done, result, log := webGrabState.snapshot()
+	running, done, result, current, results, log := webGrabState.snapshot()
 	writeJSON(w, map[string]interface{}{
 		"loggedIn": getLoggedIn(),
 		"running":  running,
 		"done":     done,
 		"result":   result,
+		"current":  current,
+		"results":  results,
 		"log":      log,
 	})
 }
@@ -252,6 +263,8 @@ func handleGrab(w http.ResponseWriter, r *http.Request) {
 	webGrabState.running = true
 	webGrabState.done = false
 	webGrabState.result = ""
+	webGrabState.current = ""
+	webGrabState.results = nil
 	webGrabState.log = nil
 	webGrabState.mu.Unlock()
 
@@ -260,17 +273,25 @@ func handleGrab(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGrabStatus(w http.ResponseWriter, r *http.Request) {
-	running, done, result, log := webGrabState.snapshot()
+	running, done, result, current, results, log := webGrabState.snapshot()
 	writeJSON(w, map[string]interface{}{
 		"running": running,
 		"done":    done,
 		"result":  result,
+		"current": current,
+		"results": results,
 		"log":     log,
 	})
 }
 
+func handleGrabStop(w http.ResponseWriter, r *http.Request) {
+	grabStop.Store(true)
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
 func webGrabRun(xnxq string, targets []Target, trigger string) {
 	logf := webGrabState.addLog
+	grabStop.Store(false)
 	defer func() {
 		if rec := recover(); rec != nil {
 			logf("程序异常: %v", rec)
@@ -278,6 +299,7 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 		webGrabState.mu.Lock()
 		webGrabState.running = false
 		webGrabState.done = true
+		webGrabState.current = ""
 		webGrabState.mu.Unlock()
 	}()
 
@@ -291,7 +313,13 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 		}
 		offset := measureClockOffset(webClient)
 		logf("目标开闸时间(服务器): %s", target.Format("2006-01-02 15:04:05"))
+		webGrabState.current = "等待开闸..."
 		for {
+			if grabStop.Load() {
+				logf("已手动停止（等待阶段）")
+				webGrabState.result = "已停止"
+				return
+			}
 			serverNow := time.Now().Add(offset)
 			if !serverNow.Before(target) {
 				break
@@ -313,8 +341,20 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 
 	// 依次抢多门
 	for i, t := range targets {
+		name := t.Name
+		if name == "" {
+			name = t.Rwh
+		}
+		webGrabState.mu.Lock()
+		webGrabState.current = fmt.Sprintf("第 %d/%d 门：%s", i+1, len(targets), name)
+		webGrabState.mu.Unlock()
 		logf("=== 抢第 %d/%d 门: %s / %s ===", i+1, len(targets), t.Xklb, t.Rwh)
 		res := grabCourse(webClient, xnxq, t.Xklb, t.Rwh, 150*time.Millisecond, 300, logf)
+		ok := res == ResSuccess || res == ResDuplicate
+		webGrabState.mu.Lock()
+		webGrabState.results = append(webGrabState.results, grabResult{Name: name, Result: res.String(), Ok: ok})
+		webGrabState.mu.Unlock()
+
 		switch res {
 		case ResSuccess, ResDuplicate:
 			logf("✅ 第 %d 门选课成功", i+1)
@@ -322,10 +362,19 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 			logf("⚠ 触发风控冻结！立即停止。")
 			webGrabState.result = "触发风控冻结"
 			return
+		case ResStopped:
+			logf("已停止，未继续后续课程")
+			webGrabState.result = "已停止"
+			return
 		case ResCapacityFull:
 			logf("第 %d 门容量已满", i+1)
 		default:
 			logf("第 %d 门未成功（%s）", i+1, res)
+		}
+		if grabStop.Load() {
+			logf("已手动停止，未继续后续课程")
+			webGrabState.result = "已停止"
+			return
 		}
 	}
 	webGrabState.result = "完成"
@@ -365,6 +414,7 @@ func runWeb() {
 	mux.HandleFunc("/api/courses", handleCourses)
 	mux.HandleFunc("/api/grab", handleGrab)
 	mux.HandleFunc("/api/grab/status", handleGrabStatus)
+	mux.HandleFunc("/api/grab/stop", handleGrabStop)
 
 	addr := "127.0.0.1:8080"
 	go openBrowser("http://" + addr)

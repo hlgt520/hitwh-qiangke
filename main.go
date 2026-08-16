@@ -40,8 +40,9 @@ var courseTypeList = []struct{ key, label string }{
 
 // Target 一门待抢课程。
 type Target struct {
-	Xklb string `json:"xklb"` // 选课类别
-	Rwh  string `json:"rwh"`  // 课程任务号
+	Xklb string `json:"xklb"`           // 选课类别
+	Rwh  string `json:"rwh"`            // 课程任务号
+	Name string `json:"name,omitempty"` // 课程名（显示用）
 }
 
 // parseTargets 解析 -targets 参数：xklb:rwh,xklb:rwh,...

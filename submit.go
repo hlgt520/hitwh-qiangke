@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,7 +23,11 @@ const (
 	ResNotForGrade
 	ResCapacityFull
 	ResFrozen
+	ResStopped
 )
+
+// grabStop 全局停止标志（Web 界面的「停止」按钮使用）。
+var grabStop atomic.Bool
 
 func (r SubmitResult) String() string {
 	switch r {
@@ -44,6 +49,8 @@ func (r SubmitResult) String() string {
 		return "容量已满"
 	case ResFrozen:
 		return "触发风控/冻结"
+	case ResStopped:
+		return "手动停止"
 	}
 	return "未知结果"
 }
@@ -113,7 +120,7 @@ func (r *rateLimiter) wait() {
 
 func isDecisive(r SubmitResult) bool {
 	switch r {
-	case ResSuccess, ResDuplicate, ResCapacityFull, ResIllegal, ResNotForGrade, ResFrozen:
+	case ResSuccess, ResDuplicate, ResCapacityFull, ResIllegal, ResNotForGrade, ResFrozen, ResStopped:
 		return true
 	}
 	// ResNotRegistered / ResNotWithinTime 是"选课未开放"的暂时状态，应重试而非停止
@@ -124,6 +131,10 @@ func isDecisive(r SubmitResult) bool {
 func grabCourse(c *http.Client, xnxq, xklb, rwh string, interval time.Duration, maxRetries int, logf func(string, ...interface{})) SubmitResult {
 	rl := newRateLimiter(interval)
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if grabStop.Load() {
+			logf("已手动停止")
+			return ResStopped
+		}
 		rl.wait()
 		token, err := fetchToken(c, xnxq, xklb)
 		if err != nil {
