@@ -1,0 +1,38 @@
+name: build-release
+
+# 触发方式：
+#   1. 推送 tag（如 git tag v1.0.0 && git push origin v1.0.0）→ 自动构建并发布 GitHub Release
+#   2. 仓库页面 Actions → build-release → Run workflow（手动触发）
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - name: 构建并打包
+        shell: pwsh
+        run: ./build-release.ps1 -Version $env:GITHUB_REF_NAME
+
+      - name: 上传构建产物（Actions 页面可下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: qiangke-release
+          path: dist/*.zip
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
