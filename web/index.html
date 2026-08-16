@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HITWH 抢课</title>
+<style>
+  :root{
+    --bg:#f5f7fa; --card:#fff; --border:#e2e8f0; --text:#1e293b; --muted:#64748b;
+    --primary:#2563eb; --primary-h:#1d4ed8; --green:#16a34a; --red:#dc2626; --amber:#d97706;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+  .wrap{max-width:1000px;margin:0 auto;padding:20px}
+  header{display:flex;align-items:center;justify-content:space-between;background:var(--card);padding:16px 20px;border-radius:10px;border:1px solid var(--border);margin-bottom:16px}
+  header h1{font-size:20px}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:4px 12px;border-radius:20px;font-weight:500}
+  .badge.on{background:#ecfdf5;color:var(--green)}
+  .badge.off{background:#fef2f2;color:var(--red)}
+  .btn{border:none;cursor:pointer;border-radius:6px;padding:8px 16px;font-size:14px;font-weight:500;transition:.15s}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-primary{background:var(--primary);color:#fff}
+  .btn-primary:hover:not(:disabled){background:var(--primary-h)}
+  .btn-ghost{background:#fff;color:var(--text);border:1px solid var(--border)}
+  .btn-ghost:hover:not(:disabled){background:var(--bg)}
+  .btn-danger{background:#fff;color:var(--red);border:1px solid #fecaca}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px}
+  .card h2{font-size:16px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
+  .row label{font-size:14px;color:var(--muted);white-space:nowrap}
+  select,input[type=text]{border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:14px;background:#fff}
+  select{min-width:130px}
+  input[type=text]{flex:1;min-width:180px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+  th{background:#f8fafc;color:var(--muted);font-weight:500;position:sticky;top:0}
+  tbody tr:hover{background:#f8fafc}
+  .muted{color:var(--muted)}
+  .qr-box{text-align:center;margin:10px 0}
+  .qr-box img{width:200px;height:200px;border:1px solid var(--border);border-radius:8px}
+  .qr-status{margin-top:8px;font-size:14px;color:var(--muted)}
+  .target-item{display:flex;align-items:center;gap:10px;background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:14px}
+  .target-item .rm{margin-left:auto;color:var(--red);cursor:pointer;font-size:13px;border:none;background:none}
+  .log{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:14px;font-family:Consolas,Monaco,monospace;font-size:13px;max-height:380px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+  .hint{font-size:12px;color:var(--muted)}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #cbd5e1;border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🎓 HITWH 抢课</h1>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span id="session-badge" class="badge off">未登录</span>
+      <button id="logout-btn" class="btn btn-danger" style="display:none">退出登录</button>
+    </div>
+  </header>
+
+  <!-- 步骤1 登录 -->
+  <div class="card">
+    <h2>① 登录</h2>
+    <div id="login-area">
+      <button id="login-btn" class="btn btn-primary">生成二维码登录</button>
+      <div id="qr-box" class="qr-box" style="display:none">
+        <img id="qr-img" src="" alt="二维码">
+        <div id="qr-status" class="qr-status">等待扫码...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 步骤2 选课 -->
+  <div class="card">
+    <h2>② 选择课程（可跨类别多选）</h2>
+    <div class="row">
+      <label>学年学期</label>
+      <select id="semester"></select>
+      <label>类别</label>
+      <select id="course-type"></select>
+      <label>搜索</label>
+      <input type="text" id="keyword" placeholder="课程名/代码关键词，回车查询">
+      <button id="query-btn" class="btn btn-primary">查询</button>
+    </div>
+    <div id="course-count" class="hint" style="margin-bottom:8px"></div>
+    <div style="max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
+      <table>
+        <thead>
+          <tr><th style="width:34px"></th><th>课程代码</th><th>课程名称</th><th>校区</th><th>院系</th><th>学分</th><th>已选/容量</th></tr>
+        </thead>
+        <tbody id="course-tbody"><tr><td colspan="7" class="muted" style="text-align:center">请先查询</td></tr></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="add-btn" class="btn btn-primary">➕ 添加选中课程</button>
+    </div>
+    <div>
+      <div class="hint" style="margin-bottom:6px">已选课程（按顺序抢，可删除）：</div>
+      <div id="target-list"></div>
+    </div>
+  </div>
+
+  <!-- 步骤3 开抢 -->
+  <div class="card">
+    <h2>③ 开抢</h2>
+    <div class="row">
+      <label>开闸时间</label>
+      <input type="text" id="trigger" placeholder="留空=立即；或 2026-08-15 22:09:00；或 +30s">
+    </div>
+    <button id="grab-btn" class="btn btn-primary" style="width:100%;padding:12px;font-size:16px">🚀 开始抢课</button>
+  </div>
+
+  <!-- 步骤4 进度 -->
+  <div class="card">
+    <h2>④ 抢课进度</h2>
+    <div id="grab-summary" class="hint" style="margin-bottom:8px">未开始</div>
+    <div id="grab-log" class="log">暂无日志</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let pollTimer = null, qrTimer = null, loggedIn = false;
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+  return data;
+}
+
+function setBadge(on) {
+  $('session-badge').className = 'badge ' + (on ? 'on' : 'off');
+  $('session-badge').textContent = on ? '已登录' : '未登录';
+  $('logout-btn').style.display = on ? '' : 'none';
+}
+
+async function loadState() {
+  const s = await api('/api/state');
+  loggedIn = s.loggedIn;
+  setBadge(s.loggedIn);
+  renderGrab(s);
+}
+
+function renderGrab(s) {
+  $('grab-log').textContent = s.log.length ? s.log.join('\n') : '暂无日志';
+  if (s.running) $('grab-summary').innerHTML = '<span class="spinner"></span>抢课进行中...';
+  else if (s.done) $('grab-summary').textContent = '结果：' + (s.result || '完成');
+  else $('grab-summary').textContent = '未开始';
+}
+
+// —— 登录 ——
+$('login-btn').onclick = async () => {
+  $('login-btn').disabled = true;
+  try {
+    const d = await api('/api/login/qr');
+    $('qr-box').style.display = '';
+    $('qr-img').src = '/api/login/qr.png?uuid=' + d.uuid + '&t=' + Date.now();
+    $('qr-status').textContent = '请用 HIT APP / 企业微信 扫码并确认';
+    clearInterval(qrTimer);
+    qrTimer = setInterval(async () => {
+      try {
+        const st = await api('/api/login/status?uuid=' + d.uuid);
+        if (st.status === 'scanned') $('qr-status').textContent = '已扫描，请在手机上确认...';
+        else if (st.status === 'confirmed') {
+          clearInterval(qrTimer);
+          $('qr-status').textContent = '扫码成功，正在登录...';
+          await api('/api/login/confirm', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({uuid:d.uuid})});
+          $('qr-box').style.display = 'none';
+          setBadge(true);
+          $('qr-status').textContent = '登录成功 ✅';
+          loadCourseTypes(); loadSemesters();
+        } else if (st.status === 'expired') {
+          clearInterval(qrTimer);
+          $('qr-status').textContent = '二维码已过期，请重新生成';
+        }
+      } catch(e) { clearInterval(qrTimer); $('qr-status').textContent = '出错: ' + e.message; }
+    }, 1500);
+  } catch(e) { $('qr-status').textContent = '出错: ' + e.message; }
+  $('login-btn').disabled = false;
+};
+
+$('logout-btn').onclick = async () => {
+  await api('/api/logout', {method:'POST'});
+  setBadge(false);
+  $('course-tbody').innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center">请先登录</td></tr>';
+};
+
+// —— 元数据 ——
+async function loadCourseTypes() {
+  const list = await api('/api/course-types');
+  $('course-type').innerHTML = list.map(t => `<option value="${t.key}">${t.label}</option>`).join('');
+}
+async function loadSemesters() {
+  const list = await api('/api/semesters');
+  $('semester').innerHTML = list.map(s => `<option value="${s.value}">${s.label}</option>`).join('');
+}
+
+// —— 查询课程 ——
+$('query-btn').onclick = queryCourses;
+$('keyword').onkeydown = e => { if (e.key === 'Enter') queryCourses(); };
+async function queryCourses() {
+  const xnxq = $('semester').value, xklb = $('course-type').value, kw = $('keyword').value;
+  if (!xnxq || !xklb) return alert('请选择学年学期和类别');
+  try {
+    const d = await api(`/api/courses?xnxq=${encodeURIComponent(xnxq)}&xklb=${xklb}&keyword=${encodeURIComponent(kw)}`);
+    $('course-count').textContent = `共 ${d.count} 门课`;
+    $('course-tbody').innerHTML = d.courses.map(c => `
+      <tr>
+        <td><input type="checkbox" data-rwh="${c.code}" data-xklb="${xklb}" data-name="${c.name}"></td>
+        <td>${c.kcCode}</td>
+        <td>${c.name}</td>
+        <td>${c.campus}</td>
+        <td>${c.dept}</td>
+        <td>${c.credit}</td>
+        <td>${c.capacity}</td>
+      </tr>`).join('');
+  } catch(e) { alert(e.message); }
+}
+
+// —— 已选课程 ——
+const targets = [];
+function renderTargets() {
+  $('target-list').innerHTML = targets.length ? targets.map((t,i) => `
+    <div class="target-item">
+      <span><b>${t.name}</b> <span class="muted">[${t.xklb}] ${t.rwh}</span></span>
+      <button class="rm" data-i="${i}">删除</button>
+    </div>`).join('') : '<div class="muted">尚未添加课程</div>';
+  document.querySelectorAll('#target-list .rm').forEach(b => b.onclick = () => { targets.splice(+b.dataset.i, 1); renderTargets(); });
+}
+$('add-btn').onclick = () => {
+  const boxes = [...document.querySelectorAll('#course-tbody input:checked')];
+  for (const b of boxes) {
+    const t = {xklb:b.dataset.xklb, rwh:b.dataset.rwh, name:b.dataset.name};
+    if (!targets.some(x => x.rwh === t.rwh && x.xklb === t.xklb)) targets.push(t);
+  }
+  renderTargets();
+};
+
+// —— 抢课 ——
+$('grab-btn').onclick = async () => {
+  if (!loggedIn) return alert('请先登录');
+  if (!targets.length) return alert('请先添加要抢的课程');
+  const xnxq = $('semester').value;
+  if (!xnxq) return alert('请选择学年学期');
+  try {
+    await api('/api/grab', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({xnxq, targets:targets.map(t=>({xklb:t.xklb, rwh:t.rwh})), trigger:$('trigger').value.trim()})});
+    $('grab-btn').disabled = true;
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      const s = await api('/api/grab/status');
+      renderGrab(s);
+      if (!s.running) { clearInterval(pollTimer); $('grab-btn').disabled = false; }
+    }, 800);
+  } catch(e) { alert(e.message); }
+};
+
+// 初始化
+loadState();
+loadCourseTypes();
+loadSemesters();
+</script>
+</body>
+</html>

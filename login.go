@@ -25,14 +25,22 @@ func getQRUUID(c *http.Client) (string, error) {
 	return strings.TrimSpace(string(body)), nil
 }
 
-func fetchQRCodePNG(c *http.Client, uuid, file string) error {
+func getQRCodePNG(c *http.Client, uuid string) ([]byte, error) {
 	u := getCodeURL + uuid
 	body, status, err := doGetRaw(c, u)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if status != 200 {
-		return fmt.Errorf("getCode 状态码 %d", status)
+		return nil, fmt.Errorf("getCode 状态码 %d", status)
+	}
+	return body, nil
+}
+
+func fetchQRCodePNG(c *http.Client, uuid, file string) error {
+	body, err := getQRCodePNG(c, uuid)
+	if err != nil {
+		return err
 	}
 	return os.WriteFile(file, body, 0644)
 }

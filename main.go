@@ -29,6 +29,7 @@ var (
 	accountFile   = flag.String("account", "account.json", "账号密码配置文件")
 	setAccountFlg = flag.Bool("set-account", false, "交互式设置账号密码")
 	loginModeFlag = flag.String("login", "auto", "登录方式 auto/qr/pw")
+	webFlag       = flag.Bool("web", true, "启动 Web 界面（默认；加 -web=false 用命令行）")
 )
 
 var courseTypeList = []struct{ key, label string }{
@@ -39,8 +40,8 @@ var courseTypeList = []struct{ key, label string }{
 
 // Target 一门待抢课程。
 type Target struct {
-	Xklb string // 选课类别
-	Rwh  string // 课程任务号
+	Xklb string `json:"xklb"` // 选课类别
+	Rwh  string `json:"rwh"`  // 课程任务号
 }
 
 // parseTargets 解析 -targets 参数：xklb:rwh,xklb:rwh,...
@@ -313,6 +314,22 @@ func doLogin(c *http.Client, cookieFile string) error {
 }
 
 func main() {
+	flag.Parse()
+
+	// Web 界面模式：默认（无任何命令行抢课参数时）
+	cliOps := *xnxqFlag != "" || *rwhFlag != "" || *targetsFlag != "" || *xklbFlag != "" ||
+		*loginOnlyFlag || *setAccountFlg || *reloginFlag || *triggerFlag != ""
+	if *webFlag && !cliOps {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("\n[程序异常] %v\n", r)
+				pause()
+			}
+		}()
+		runWeb()
+		return
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("\n[程序异常，已捕获] %v\n", r)
@@ -324,7 +341,6 @@ func main() {
 }
 
 func mainBody() {
-	flag.Parse()
 	client := newClient()
 
 	// Ctrl+C 时尽量释放 CAS 会话，避免僵尸会话累积触发冻结

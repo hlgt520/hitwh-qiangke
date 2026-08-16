@@ -10,9 +10,14 @@ import (
 )
 
 type Course struct {
-	Code string // rwh：提交选课用的任务号
-	Name string // 课程名称
-	Info string // 摘要：课程代码/校区/院系/学分/已选容量
+	Code     string `json:"code"`     // rwh：提交选课用的任务号
+	Name     string `json:"name"`     // 课程名称
+	KcCode   string `json:"kcCode"`   // 课程代码
+	Campus   string `json:"campus"`   // 校区
+	Dept     string `json:"dept"`     // 开课院系
+	Credit   string `json:"credit"`   // 学分
+	Capacity string `json:"capacity"` // 已选/容量
+	Info     string `json:"info"`     // 摘要（CLI 用）
 }
 
 func semesterString(yearStart, order int) string {
@@ -149,7 +154,7 @@ func parseCourses(html string) []Course {
 		capacity := cell(tds, len(tds)-1) // 已选/容量
 		info := fmt.Sprintf("课程代码=%s 校区=%s 院系=%s 学分=%s 已选/容量=%s",
 			kcCode, campus, dept, credit, capacity)
-		out = append(out, Course{Code: rwh, Name: name, Info: info})
+		out = append(out, Course{Code: rwh, Name: name, KcCode: kcCode, Campus: campus, Dept: dept, Credit: credit, Capacity: capacity, Info: info})
 	}
 	return out
 }
