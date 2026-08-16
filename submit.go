@@ -128,9 +128,10 @@ func isDecisive(r SubmitResult) bool {
 }
 
 // grabCourse 串行抢课：每次先取新 token 再提交（token 单次有效，不能并发复用）。
-func grabCourse(c *http.Client, xnxq, xklb, rwh string, interval time.Duration, maxRetries int, logf func(string, ...interface{})) SubmitResult {
+// 会一直重试，直到「选课成功 / 已选 / 容量满 / 非法 / 不在年级 / 风控 / 手动停止」才返回。
+func grabCourse(c *http.Client, xnxq, xklb, rwh string, interval time.Duration, logf func(string, ...interface{})) SubmitResult {
 	rl := newRateLimiter(interval)
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	for attempt := 1; ; attempt++ {
 		if grabStop.Load() {
 			logf("已手动停止")
 			return ResStopped
@@ -155,5 +156,4 @@ func grabCourse(c *http.Client, xnxq, xklb, rwh string, interval time.Duration, 
 		// 未开放/瞬时失败：快速重试
 		time.Sleep(150 * time.Millisecond)
 	}
-	return ResUnknown
 }

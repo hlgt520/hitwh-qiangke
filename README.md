@@ -107,7 +107,6 @@ go build -o qiangke.exe .    # 已附带编译好的 qiangke.exe
 | `-targets` | 空 | 多课程 `xklb:rwh,xklb:rwh` |
 | `-t` | 空 | 开闸时间 `2006-01-02 15:04:05`；留空=立即 |
 | `-interval` | 150 | 提交最小间隔(ms) |
-| `-retry` | 300 | 瞬时失败最大重试轮数 |
 | `-relogin` | false | 强制重新扫码 |
 | `-keepalive` | 30 | 等待期保活间隔(秒) |
 

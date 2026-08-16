@@ -349,7 +349,7 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 		webGrabState.current = fmt.Sprintf("第 %d/%d 门：%s", i+1, len(targets), name)
 		webGrabState.mu.Unlock()
 		logf("=== 抢第 %d/%d 门: %s / %s ===", i+1, len(targets), t.Xklb, t.Rwh)
-		res := grabCourse(webClient, xnxq, t.Xklb, t.Rwh, 150*time.Millisecond, 300, logf)
+		res := grabCourse(webClient, xnxq, t.Xklb, t.Rwh, 150*time.Millisecond, logf)
 		ok := res == ResSuccess || res == ResDuplicate
 		webGrabState.mu.Lock()
 		webGrabState.results = append(webGrabState.results, grabResult{Name: name, Result: res.String(), Ok: ok})
@@ -381,6 +381,28 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 	logf("全部课程处理完成")
 }
 
+// —— 保活 ——
+// defaultXnxq 返回当前年份的秋季学期（用于保活时的默认查询参数）。
+func defaultXnxq() string {
+	return semesterString(time.Now().Year(), 1)
+}
+
+// startKeepalive 登录后每 60 秒轻量查询一次，保持会话不过期；会话失效则标记未登录。
+func startKeepalive() {
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if !getLoggedIn() || webGrabState.running {
+				continue
+			}
+			if _, err := fetchToken(webClient, defaultXnxq(), "cxsy"); err != nil {
+				setLoggedIn(false) // 会话可能已失效
+			}
+		}
+	}()
+}
+
 // —— 启动 ——
 func openBrowser(url string) {
 	var cmd *exec.Cmd
@@ -400,6 +422,7 @@ func runWeb() {
 	if ok, _ := loadCookies(webClient, "cookie.json"); ok {
 		setLoggedIn(true)
 	}
+	startKeepalive() // 登录后每 60 秒保活，避免会话过期
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleIndex)
