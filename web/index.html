@@ -144,6 +144,7 @@ async function api(url, opts) {
 }
 
 function setBadge(on) {
+  loggedIn = on;  // 同步登录状态变量，避免登录成功后仍提示"请先登录"
   $('session-badge').className = 'badge ' + (on ? 'on' : 'off');
   $('session-badge').textContent = on ? '已登录' : '未登录';
   $('logout-btn').style.display = on ? '' : 'none';
@@ -151,8 +152,7 @@ function setBadge(on) {
 
 async function loadState() {
   const s = await api('/api/state');
-  loggedIn = s.loggedIn;
-  setBadge(s.loggedIn);
+  setBadge(s.loggedIn);  // 内部已同步 loggedIn
   renderGrab(s);
 }
 
