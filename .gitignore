@@ -2,6 +2,9 @@
 *.exe
 qiangke.exe~
 
+# 发布产物
+dist/
+
 # 敏感文件（含会话/账号信息，切勿提交）
 cookie.json
 account.json
