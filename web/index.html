@@ -24,6 +24,8 @@
   .btn-ghost{background:#fff;color:var(--text);border:1px solid var(--border)}
   .btn-ghost:hover:not(:disabled){background:var(--bg)}
   .btn-danger{background:#fff;color:var(--red);border:1px solid #fecaca}
+  .quick.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+  input[type=datetime-local]{border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:14px;background:#fff;min-width:210px}
   .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px}
   .card h2{font-size:16px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
   .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
@@ -104,8 +106,18 @@
     <h2>③ 开抢</h2>
     <div class="row">
       <label>开闸时间</label>
-      <input type="text" id="trigger" placeholder="留空=立即；或 2026-08-15 22:09:00；或 +30s">
+      <input type="datetime-local" id="trigger-dt">
     </div>
+    <div class="row">
+      <label>快捷</label>
+      <button class="btn btn-ghost quick" data-val="">立即</button>
+      <button class="btn btn-ghost quick" data-val="+10s">+10秒</button>
+      <button class="btn btn-ghost quick" data-val="+1m">+1分</button>
+      <button class="btn btn-ghost quick" data-val="+5m">+5分</button>
+      <button class="btn btn-ghost quick" data-val="+30m">+30分</button>
+      <button class="btn btn-ghost quick" data-val="+1h">+1小时</button>
+    </div>
+    <div id="trigger-hint" class="hint" style="margin-bottom:10px">未设置 = 立即抢</div>
     <button id="grab-btn" class="btn btn-primary" style="width:100%;padding:12px;font-size:16px">🚀 开始抢课</button>
     <button id="stop-btn" class="btn btn-danger" style="width:100%;padding:12px;font-size:16px;margin-top:10px;display:none">🛑 停止选课</button>
   </div>
@@ -122,7 +134,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let pollTimer = null, qrTimer = null, loggedIn = false;
+let pollTimer = null, qrTimer = null, loggedIn = false, triggerVal = '';
 
 async function api(url, opts) {
   const r = await fetch(url, opts);
@@ -264,7 +276,7 @@ $('grab-btn').onclick = async () => {
   if (!xnxq) return alert('请选择学年学期');
   try {
     await api('/api/grab', {method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({xnxq, targets:targets.map(t=>({xklb:t.xklb, rwh:t.rwh, name:t.name})), trigger:$('trigger').value.trim()})});
+      body:JSON.stringify({xnxq, targets:targets.map(t=>({xklb:t.xklb, rwh:t.rwh, name:t.name})), trigger:triggerVal})});
     $('grab-btn').disabled = true;
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
@@ -280,6 +292,24 @@ $('stop-btn').onclick = async () => {
     await api('/api/grab/stop', {method:'POST'});
     $('grab-summary').textContent = '正在停止...';
   } catch(e) { alert(e.message); }
+};
+
+// —— 开闸时间设置 ——
+function updateTriggerHint() {
+  $('trigger-hint').textContent = triggerVal ? ('触发时间：' + triggerVal) : '未设置 = 立即抢';
+}
+document.querySelectorAll('.quick').forEach(b => b.onclick = () => {
+  triggerVal = b.dataset.val;
+  $('trigger-dt').value = '';
+  document.querySelectorAll('.quick').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  updateTriggerHint();
+});
+$('trigger-dt').onchange = () => {
+  const v = $('trigger-dt').value;  // 形如 2026-08-15T22:09
+  triggerVal = v ? (v.replace('T', ' ') + ':00') : '';
+  document.querySelectorAll('.quick').forEach(x => x.classList.remove('active'));
+  updateTriggerHint();
 };
 
 // 初始化
