@@ -87,6 +87,10 @@ func qrLogin(c *http.Client, cookieFile string) error {
 	if err != nil {
 		return err
 	}
+	execution, err := getLoginExecution(c)
+	if err != nil {
+		return err
+	}
 	qrPath := "login_qrcode.png"
 	if err := fetchQRCodePNG(c, uuid, qrPath); err != nil {
 		return err
@@ -104,7 +108,7 @@ func qrLogin(c *http.Client, cookieFile string) error {
 		switch st {
 		case "1":
 			fmt.Println("扫码已确认，正在登录教务系统...")
-			if err := doCASLogin(c, uuid); err != nil {
+			if err := doCASLogin(c, uuid, execution); err != nil {
 				return err
 			}
 			if err := saveCookies(c, cookieFile); err != nil {

@@ -24,6 +24,7 @@ var (
 
 	qrCacheMu sync.Mutex
 	qrCache   = map[string][]byte{}
+	qrExec    = map[string]string{}
 )
 
 type grabState struct {
@@ -112,6 +113,11 @@ func handleLoginQR(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "获取二维码失败: "+err.Error())
 		return
 	}
+	execution, err := getLoginExecution(webClient)
+	if err != nil {
+		writeErr(w, 500, "获取登录页失败: "+err.Error())
+		return
+	}
 	png, err := getQRCodePNG(webClient, uuid)
 	if err != nil {
 		writeErr(w, 500, "生成二维码失败: "+err.Error())
@@ -119,6 +125,7 @@ func handleLoginQR(w http.ResponseWriter, r *http.Request) {
 	}
 	qrCacheMu.Lock()
 	qrCache[uuid] = png
+	qrExec[uuid] = execution
 	qrCacheMu.Unlock()
 	writeJSON(w, map[string]string{"uuid": uuid})
 }
@@ -163,7 +170,14 @@ func handleLoginConfirm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "uuid 为空")
 		return
 	}
-	if err := doCASLogin(webClient, req.Uuid); err != nil {
+	qrCacheMu.Lock()
+	execution := qrExec[req.Uuid]
+	qrCacheMu.Unlock()
+	if execution == "" {
+		writeErr(w, 400, "二维码状态异常，请重新生成")
+		return
+	}
+	if err := doCASLogin(webClient, req.Uuid, execution); err != nil {
 		writeErr(w, 500, "登录失败: "+err.Error())
 		return
 	}

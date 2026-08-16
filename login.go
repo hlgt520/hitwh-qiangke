@@ -59,21 +59,24 @@ func getQRStatus(c *http.Client, uuid string) (string, error) {
 
 var reExecution = regexp.MustCompile(`name="execution"[^>]*value="([^"]*)"`)
 
-// doCASLogin 完成 CAS 扫码登录；成功后 CAS 会跳转到 jwts.hitwh.edu.cn/loginCAS 建立教务会话。
-func doCASLogin(c *http.Client, uuid string) error {
+// getLoginExecution 在生成二维码时提前获取登录页的 execution（避免扫码确认后重定向拿不到）。
+func getLoginExecution(c *http.Client) (string, error) {
 	body, status, _, _, err := doGet(c, loginURL)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if status != 200 {
-		return fmt.Errorf("登录页状态码 %d", status)
+		return "", fmt.Errorf("登录页状态码 %d", status)
 	}
 	m := reExecution.FindSubmatch(body)
 	if m == nil {
-		return fmt.Errorf("未找到 execution 字段")
+		return "", fmt.Errorf("未找到 execution 字段")
 	}
-	execution := string(m[1])
+	return string(m[1]), nil
+}
 
+// doCASLogin 完成 CAS 扫码登录；execution 需提前通过 getLoginExecution 获取。
+func doCASLogin(c *http.Client, uuid, execution string) error {
 	form := url.Values{}
 	form.Set("lt", "")
 	form.Set("uuid", uuid)
