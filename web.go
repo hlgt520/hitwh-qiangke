@@ -493,10 +493,9 @@ func runWeb() {
 		// 否则过期 cookie 会让界面误报已登录。
 		go func() {
 			if _, err := fetchToken(webClient, defaultXnxq(), "cxsy"); err != nil {
+				// 保存的会话已失效：静默标记未登录即可。
+				// 刚打开程序还没登录，过期属正常现象，不打日志、不弹告警。
 				setLoggedIn(false)
-				recordKeepalive(false)
-				webGrabState.addLog("⚠⚠ [启动] 保存的会话已失效，请重新登录")
-				fmt.Println("⚠⚠ [启动] 保存的会话（cookie.json）已失效，请重新登录")
 			} else {
 				setLoggedIn(true)
 				recordKeepalive(true)
