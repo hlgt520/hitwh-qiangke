@@ -97,6 +97,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 // —— 会话状态 ——
 func handleState(w http.ResponseWriter, r *http.Request) {
 	running, done, result, current, results, log := webGrabState.snapshot()
+	kt, kok, khas := keepaliveSnapshot()
 	writeJSON(w, map[string]interface{}{
 		"loggedIn": getLoggedIn(),
 		"running":  running,
@@ -105,6 +106,11 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		"current":  current,
 		"results":  results,
 		"log":      log,
+		"keepalive": map[string]interface{}{
+			"time": kt,
+			"ok":   kok,
+			"has":  khas,
+		},
 	})
 }
 
@@ -188,6 +194,7 @@ func handleLoginConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setLoggedIn(true)
+	resetKeepalive() // 登录成功后清除之前的"会话失效"告警状态
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -343,9 +350,11 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 			remain := target.Sub(serverNow)
 			if remain > 30*time.Second {
 				if _, err := fetchToken(webClient, xnxq, targets[0].Xklb); err != nil {
-					logf("[保活] 失败: %v", err)
+					recordKeepalive(false)
+					logf("⚠⚠ [保活] 探测失败: %v —— 会话可能已失效，请在开闸前重新登录！", err)
+					fmt.Println("⚠⚠ [保活] 会话可能已失效，请立即重新登录！")
 				} else {
-					logf("[保活] 会话正常，距开闸 %v", remain.Round(time.Second))
+					recordKeepalive(true) // 正常时静默
 				}
 				time.Sleep(30 * time.Second)
 			} else {
@@ -378,6 +387,11 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 			logf("⚠ 触发风控冻结！立即停止。")
 			webGrabState.result = "触发风控冻结"
 			return
+		case ResSessionDead:
+			recordKeepalive(false)
+			logf("⚠⚠ 会话已失效，停止抢课。请重新登录后再试！")
+			webGrabState.result = "会话已失效"
+			return
 		case ResStopped:
 			logf("已停止，未继续后续课程")
 			webGrabState.result = "已停止"
@@ -403,20 +417,59 @@ func defaultXnxq() string {
 	return semesterString(time.Now().Year(), 1)
 }
 
-// startKeepalive 登录后每 60 秒轻量查询一次，保持会话不过期；会话失效则标记未登录。
+// startKeepalive 登录后每 30 秒轻量查询保活：正常时静默（只更新状态），
+// 一旦失效立即全通道醒目告警（界面横幅+日志+控制台+标题栏），并标记未登录。
 func startKeepalive() {
 	go func() {
-		ticker := time.NewTicker(60 * time.Second)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			if !getLoggedIn() || webGrabState.running {
 				continue
 			}
 			if _, err := fetchToken(webClient, defaultXnxq(), "cxsy"); err != nil {
-				setLoggedIn(false) // 会话可能已失效
+				ts := time.Now().Format("15:04:05")
+				recordKeepalive(false)
+				setLoggedIn(false)
+				webGrabState.addLog("⚠⚠ [保活] %s 会话已失效（%v）—— 请立即重新登录！", ts, err)
+				fmt.Println("⚠⚠ [保活] 会话已失效，请立即重新登录！", err)
+			} else {
+				recordKeepalive(true) // 正常时静默：只刷新状态，不打日志
 			}
 		}
 	}()
+}
+
+// —— 保活状态（界面顶部显示"最近保活时间"，失效时醒目告警）——
+var keepaliveState struct {
+	mu   sync.Mutex
+	time time.Time
+	ok   bool
+	has  bool
+}
+
+func recordKeepalive(ok bool) {
+	keepaliveState.mu.Lock()
+	keepaliveState.time = time.Now()
+	keepaliveState.ok = ok
+	keepaliveState.has = true
+	keepaliveState.mu.Unlock()
+}
+
+// resetKeepalive 清除保活状态（重新登录成功后调用，撤销失效告警）。
+func resetKeepalive() {
+	keepaliveState.mu.Lock()
+	keepaliveState.has = false
+	keepaliveState.mu.Unlock()
+}
+
+func keepaliveSnapshot() (timeStr string, ok bool, has bool) {
+	keepaliveState.mu.Lock()
+	defer keepaliveState.mu.Unlock()
+	if !keepaliveState.has {
+		return "", false, false
+	}
+	return keepaliveState.time.Format("15:04:05"), keepaliveState.ok, true
 }
 
 // —— 启动 ——
@@ -436,9 +489,21 @@ func openBrowser(url string) {
 func runWeb() {
 	webClient = newClient()
 	if ok, _ := loadCookies(webClient, "cookie.json"); ok {
-		setLoggedIn(true)
+		// 不盲目信任 cookie.json：先验证会话再显示「已登录」，
+		// 否则过期 cookie 会让界面误报已登录。
+		go func() {
+			if _, err := fetchToken(webClient, defaultXnxq(), "cxsy"); err != nil {
+				setLoggedIn(false)
+				recordKeepalive(false)
+				webGrabState.addLog("⚠⚠ [启动] 保存的会话已失效，请重新登录")
+				fmt.Println("⚠⚠ [启动] 保存的会话（cookie.json）已失效，请重新登录")
+			} else {
+				setLoggedIn(true)
+				recordKeepalive(true)
+			}
+		}()
 	}
-	startKeepalive() // 登录后每 60 秒保活，避免会话过期
+	startKeepalive() // 登录后每 30 秒保活探测，失效即时告警
 
 	// 退出时尽力释放 CAS 会话（与 CLI 模式对齐），避免僵尸会话累积到冻结阈值：
 	// 1) Ctrl+C：Go 的 os/signal 可以捕获，先登出再退出；

@@ -285,6 +285,8 @@ func runGrab(c *http.Client, xnxq, xklb, rwh string) {
 		fmt.Println("非法操作（token 过期/会话失效？可加 -relogin 重试）。")
 	case ResNotForGrade:
 		fmt.Println("不在面向年级内，不可选。")
+	case ResSessionDead:
+		fmt.Println("⚠⚠ 会话已失效（连续取 token 失败），请重新登录后再试。")
 	case ResStopped:
 		fmt.Println("已手动停止。")
 	}
@@ -442,7 +444,7 @@ func mainBody() {
 			remain := target.Sub(serverNow)
 			if remain > time.Duration(*keepAliveSec)*time.Second {
 				if _, err := fetchToken(client, xnxq, targets[0].Xklb); err != nil {
-					fmt.Println("[keepalive] 失败:", err)
+					fmt.Println("⚠⚠ [keepalive] 失败:", err, "—— 会话可能已失效，请重新登录！")
 				} else {
 					fmt.Printf("[keepalive] %s 会话正常，距开闸 %v\n",
 						serverNow.Format("15:04:05"), remain.Round(time.Second))
