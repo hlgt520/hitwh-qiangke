@@ -365,7 +365,7 @@ func webGrabRun(xnxq string, targets []Target, trigger string) {
 		webGrabState.current = fmt.Sprintf("第 %d/%d 门：%s", i+1, len(targets), name)
 		webGrabState.mu.Unlock()
 		logf("=== 抢第 %d/%d 门: %s / %s ===", i+1, len(targets), t.Xklb, t.Rwh)
-		res := grabCourse(webClient, xnxq, t.Xklb, t.Rwh, 150*time.Millisecond, logf)
+		res := grabCourse(webClient, xnxq, t.Xklb, t.Rwh, logf)
 		ok := res == ResSuccess || res == ResDuplicate
 		webGrabState.mu.Lock()
 		webGrabState.results = append(webGrabState.results, grabResult{Name: name, Result: res.String(), Ok: ok})

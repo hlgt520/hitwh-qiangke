@@ -21,7 +21,6 @@ var (
 	targetsFlag   = flag.String("targets", "", "多课程目标，格式 xklb:rwh,xklb:rwh 如 cxyx:xxx,cxsy:yyy")
 	xnxqFlag      = flag.String("xnxq", "", "学年学期，如 2026-20271")
 	triggerFlag   = flag.String("t", "", "选课开始时间，如 2026-08-25 12:30:00（留空=立即提交）")
-	intervalFlag  = flag.Int("interval", 150, "提交最小间隔(毫秒)")
 	reloginFlag   = flag.Bool("relogin", false, "强制重新登录")
 	loginOnlyFlag = flag.Bool("login-only", false, "仅登录并保存 cookie 后退出")
 	keepAliveSec  = flag.Int("keepalive", 30, "等待开闸期间的保活间隔(秒)")
@@ -274,7 +273,7 @@ func runGrab(c *http.Client, xnxq, xklb, rwh string) {
 		ts := time.Now().Format("15:04:05.000")
 		fmt.Printf("[%s] %s\n", ts, fmt.Sprintf(f, a...))
 	}
-	res := grabCourse(c, xnxq, xklb, rwh, time.Duration(*intervalFlag)*time.Millisecond, logf)
+	res := grabCourse(c, xnxq, xklb, rwh, logf)
 	switch res {
 	case ResSuccess, ResDuplicate:
 		fmt.Println("✅ 选课成功，停止。")

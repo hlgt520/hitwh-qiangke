@@ -2,10 +2,8 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -94,66 +92,41 @@ func submitOnce(c *http.Client, xklb, xnxq, rwh, token string) (SubmitResult, er
 	return classifySubmit(string(body)), nil
 }
 
-// rateLimiter 限制提交节奏，防止短时间高频。
-type rateLimiter struct {
-	minInterval time.Duration
-	mu          sync.Mutex
-	last        time.Time
-}
-
-func newRateLimiter(interval time.Duration) *rateLimiter {
-	return &rateLimiter{minInterval: interval}
-}
-
-func (r *rateLimiter) wait() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.last.IsZero() {
-		elapsed := time.Since(r.last)
-		if elapsed < r.minInterval {
-			jitter := time.Duration(rand.Int63n(r.minInterval.Nanoseconds()/4 + 1))
-			time.Sleep(r.minInterval - elapsed + jitter)
-		}
-	}
-	r.last = time.Now()
-}
-
 func isDecisive(r SubmitResult) bool {
 	switch r {
-	case ResSuccess, ResDuplicate, ResCapacityFull, ResIllegal, ResNotForGrade, ResFrozen, ResStopped:
+	case ResSuccess, ResDuplicate, ResCapacityFull, ResNotForGrade, ResFrozen, ResStopped:
 		return true
 	}
-	// ResNotRegistered / ResNotWithinTime 是"选课未开放"的暂时状态，应重试而非停止
+	// 非法操作/选课失败/未注册/不在时间/未知 → 重试。
+	// 「非法操作」通常是 token 过期（token 单次有效），下一轮重新取 token 即可，不应停止。
 	return false
 }
 
 // grabCourse 串行抢课：每次先取新 token 再提交（token 单次有效，不能并发复用）。
-// 会一直重试，直到「选课成功 / 已选 / 容量满 / 非法 / 不在年级 / 风控 / 手动停止」才返回。
-func grabCourse(c *http.Client, xnxq, xklb, rwh string, interval time.Duration, logf func(string, ...interface{})) SubmitResult {
-	rl := newRateLimiter(interval)
+// 一直重试，直到「选课成功 / 已选 / 容量满 / 不在年级 / 风控 / 手动停止」才返回。
+// 抢课拼速度：去掉人为限速与退避，让网络往返成为唯一的节流。
+func grabCourse(c *http.Client, xnxq, xklb, rwh string, logf func(string, ...interface{})) SubmitResult {
 	for attempt := 1; ; attempt++ {
 		if grabStop.Load() {
 			logf("已手动停止")
 			return ResStopped
 		}
-		rl.wait()
 		token, err := fetchToken(c, xnxq, xklb)
 		if err != nil {
 			logf("第%d次：取 token 失败 %v", attempt, err)
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		res, err := submitOnce(c, xklb, xnxq, rwh, token)
 		if err != nil {
 			logf("第%d次：提交异常 %v", attempt, err)
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		logf("第%d次：%s", attempt, res)
 		if isDecisive(res) {
 			return res
 		}
-		// 未开放/瞬时失败：快速重试
-		time.Sleep(150 * time.Millisecond)
+		// 未开放/瞬时失败：立即重试，不人为延迟
 	}
 }
