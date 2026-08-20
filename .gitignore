@@ -9,6 +9,7 @@ dist/
 cookie.json
 account.json
 smscode.txt
+bfp.txt
 
 # 图片（二维码/验证码）
 *.png

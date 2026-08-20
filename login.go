@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -59,6 +61,53 @@ func getQRStatus(c *http.Client, uuid string) (string, error) {
 
 var reExecution = regexp.MustCompile(`name="execution"[^>]*value="([^"]*)"`)
 
+// bfpFile 保存统一认证的设备指纹（信任此设备依赖同一指纹，需持久化）。
+const bfpFile = "bfp.txt"
+
+// getOrCreateBFP 读取或生成 32 位大写十六进制设备指纹。
+func getOrCreateBFP() (string, error) {
+	if data, err := os.ReadFile(bfpFile); err == nil {
+		s := strings.TrimSpace(string(data))
+		valid := len(s) == 32
+		for _, ch := range s {
+			if !(ch >= '0' && ch <= '9') && !(ch >= 'A' && ch <= 'F') {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return s, nil
+		}
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	s := strings.ToUpper(hex.EncodeToString(b))
+	if err := os.WriteFile(bfpFile, []byte(s), 0600); err != nil {
+		return "", err
+	}
+	return s, nil
+}
+
+// registerBrowserFingerprint 注册统一认证设备指纹（信任此设备的前提）。
+func registerBrowserFingerprint(c *http.Client) error {
+	bfp, err := getOrCreateBFP()
+	if err != nil {
+		return err
+	}
+	u := casBase + "/bfp/info?bfp=" + bfp + "&_=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+	_, status, _, _, err := doGet(c, u)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("注册设备指纹状态码 %d", status)
+	}
+	fmt.Println("[login] 设备指纹已注册:", bfp)
+	return nil
+}
+
 // getLoginExecution 在生成二维码时提前获取登录页的 execution（避免扫码确认后重定向拿不到）。
 func getLoginExecution(c *http.Client) (string, error) {
 	body, status, _, _, err := doGet(c, loginURL)
@@ -98,6 +147,10 @@ func doCASLogin(c *http.Client, uuid string) error {
 		return fmt.Errorf("未找到 execution 字段")
 	}
 	execution := string(m[1])
+
+	if err := registerBrowserFingerprint(c); err != nil {
+		return fmt.Errorf("注册设备指纹失败: %v", err)
+	}
 
 	form := url.Values{}
 	form.Set("lt", "")
@@ -180,6 +233,10 @@ func passwordLogin(c *http.Client, username, password string) error {
 	s := string(body)
 	salt := extractValue(s, "pwdEncryptSalt")
 	execution := extractValue(s, "execution")
+
+	if err := registerBrowserFingerprint(c); err != nil {
+		return fmt.Errorf("注册设备指纹失败: %v", err)
+	}
 
 	captcha := ""
 	if checkNeedCaptcha(c, username) {
@@ -281,9 +338,13 @@ func completeMFA(c *http.Client, mfaHTML string) error {
 		return fmt.Errorf("验证码为空")
 	}
 
-	// 4. 提交验证码（skipTmpReAuth=false = 仅本次登录。
-	//    实测：false 才能完成登录直达教务系统；true（信任此设备）会让 /login 又跳回二次验证页。）
-	if err := submitMFA(c, code, "false"); err != nil {
+	// 4. 询问是否信任此设备，并在首次提交时带上 skipTmpReAuth。
+	//    验证码一次性，登录成功后再补提交 trust 无效，必须在这里决定。
+	s2 := ask("是否信任此设备，下次登录免短信验证码？(y/n，默认 y): ")
+	trust := strings.ToLower(s2) != "n" && strings.ToLower(s2) != "no"
+	trustStr := strconv.FormatBool(trust)
+	fmt.Println("[mfa] skipTmpReAuth =", trustStr)
+	if err := submitMFA(c, code, trustStr); err != nil {
 		return err
 	}
 
@@ -298,6 +359,12 @@ func completeMFA(c *http.Client, mfaHTML string) error {
 	}
 	fmt.Printf("[mfa] /login 状态=%d 最终跳转=%s 又触发二次验证=%v\n",
 		status3, finalURL, strings.Contains(finalURL, "reAuthCheck") || strings.Contains(finalURL, "isMultifactor"))
+	if strings.Contains(finalURL, "reAuthCheck") || strings.Contains(finalURL, "isMultifactor") {
+		return fmt.Errorf("二次认证未完成，服务器仍要求二次验证（%s）", finalURL)
+	}
+	if trust {
+		fmt.Println("[mfa] 已按「信任此设备」完成本次登录，下次应跳过短信验证")
+	}
 	return nil
 }
 
@@ -319,8 +386,10 @@ func submitMFA(c *http.Client, code, skipTmpReAuth string) error {
 		return err
 	}
 	fmt.Printf("[mfa] 提交响应(status=%d): %s\n", status, string(body))
-	if sc := hdr.Get("Set-Cookie"); sc != "" {
-		fmt.Println("[mfa] 提交 Set-Cookie:", sc)
+	if scs, ok := hdr["Set-Cookie"]; ok {
+		for _, sc := range scs {
+			fmt.Println("[mfa] 提交 Set-Cookie:", sc)
+		}
 	}
 	if strings.Contains(string(body), "reAuth_failed") || strings.Contains(string(body), "reAuth_unauthorized") {
 		return fmt.Errorf("二次验证失败：%s", string(body))

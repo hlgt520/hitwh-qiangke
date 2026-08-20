@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -239,7 +240,8 @@ func handleMFASend(w http.ResponseWriter, r *http.Request) {
 // handleMFASubmit 二次验证：提交验证码并完成登录（Web 界面用）。
 func handleMFASubmit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Code string `json:"code"`
+		Code        string `json:"code"`
+		TrustDevice bool   `json:"trustDevice"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
 		writeErr(w, 400, "验证码为空")
@@ -252,16 +254,21 @@ func handleMFASubmit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "没有待处理的二次验证，请先重新扫码登录")
 		return
 	}
-	if err := submitMFA(webClient, req.Code, "false"); err != nil {
+	if err := submitMFA(webClient, req.Code, strconv.FormatBool(req.TrustDevice)); err != nil {
 		writeErr(w, 500, "二次验证失败: "+err.Error())
 		return
 	}
-	_, _, _, _, err := doGet(webClient, casBase+"/login?service="+serviceParam)
+	_, _, finalURL, _, err := doGet(webClient, casBase+"/login?service="+serviceParam)
 	if err != nil {
 		if !strings.Contains(err.Error(), "redirect") {
 			writeErr(w, 500, "完成登录失败: "+err.Error())
 			return
 		}
+	}
+	fmt.Println("[mfa] /login 最终跳转:", finalURL)
+	if strings.Contains(finalURL, "reAuthCheck") || strings.Contains(finalURL, "isMultifactor") {
+		writeErr(w, 500, "二次认证未完成，服务器仍要求二次验证")
+		return
 	}
 	if err := saveCookies(webClient, "cookie.json"); err != nil {
 		writeErr(w, 500, "保存会话失败: "+err.Error())
@@ -272,6 +279,7 @@ func handleMFASubmit(w http.ResponseWriter, r *http.Request) {
 	webPendingMFAMu.Unlock()
 	setLoggedIn(true)
 	resetKeepalive()
+	fmt.Println("[mfa] skipTmpReAuth =", req.TrustDevice)
 	writeJSON(w, map[string]bool{"ok": true})
 }
 

@@ -81,6 +81,9 @@
           <input id="mfa-code" type="text" placeholder="输入验证码" style="width:140px">
           <button id="mfa-submit-btn" class="btn" disabled>确认</button>
         </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:6px">
+          <input type="checkbox" id="mfa-trust" checked> 信任此设备，下次登录免短信验证码
+        </label>
       </div>
     </div>
   </div>
@@ -268,7 +271,8 @@ $('mfa-submit-btn').onclick = async () => {
   if (!code) { $('mfa-status').textContent = '请输入验证码'; return; }
   $('mfa-submit-btn').disabled = true;
   try {
-    await api('/api/mfa/submit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code})});
+    await api('/api/mfa/submit', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({code, trustDevice: $('mfa-trust').checked})});
     $('mfa-box').style.display = 'none';
     $('qr-box').style.display = 'none';
     setBadge(true);
