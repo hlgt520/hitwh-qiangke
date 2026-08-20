@@ -75,8 +75,30 @@ func getLoginExecution(c *http.Client) (string, error) {
 	return string(m[1]), nil
 }
 
-// doCASLogin 完成 CAS 扫码登录；execution 需提前通过 getLoginExecution 获取。
-func doCASLogin(c *http.Client, uuid, execution string) error {
+// errMFARequired 表示登录触发了二次验证（调用方需据此进入 MFA 流程）。
+var errMFARequired = fmt.Errorf("MFA_REQUIRED")
+
+// lastMFAPage 保存最近一次触发 MFA 的二次验证页 HTML（供 completeMFA 解析账号）。
+var lastMFAPage []byte
+
+// doCASLogin 完成 CAS 扫码登录。
+// 注意：execution 必须在扫码确认后【立即】重新获取再提交——
+// 提前获取的 execution 会过期，导致 CAS 把登录判定为可疑、跳转二次验证页（教务会话建立失败）。
+// 若触发二次验证，返回 errMFARequired，调用方调用 completeMFA 完成验证。
+func doCASLogin(c *http.Client, uuid string) error {
+	body, status, _, _, err := doGet(c, loginURL)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("登录页状态码 %d", status)
+	}
+	m := reExecution.FindSubmatch(body)
+	if m == nil {
+		return fmt.Errorf("未找到 execution 字段")
+	}
+	execution := string(m[1])
+
 	form := url.Values{}
 	form.Set("lt", "")
 	form.Set("uuid", uuid)
@@ -86,7 +108,7 @@ func doCASLogin(c *http.Client, uuid, execution string) error {
 	form.Set("rmShown", "1")
 	form.Set("execution", execution)
 
-	_, status, finalURL, _, err := doPostForm(c, loginURL, form)
+	postBody, status, finalURL, _, err := doPostForm(c, loginURL, form)
 	if err != nil {
 		if strings.Contains(err.Error(), "redirect") {
 			fmt.Println("[login] 重定向链较长（CAS→教务，属正常）:", err)
@@ -100,6 +122,11 @@ func doCASLogin(c *http.Client, uuid, execution string) error {
 	fmt.Println("[login] CAS 登录提交完成, 最终跳转:", finalURL)
 	if strings.Contains(finalURL, "authserver/login") {
 		return fmt.Errorf("登录未成功（仍停留在 CAS 登录页），最终跳转: %s", finalURL)
+	}
+	if strings.Contains(finalURL, "reAuthCheck") || strings.Contains(finalURL, "isMultifactor") {
+		fmt.Println("账号需要二次验证，进入二次验证流程...")
+		lastMFAPage = append([]byte(nil), postBody...)
+		return errMFARequired
 	}
 	return nil
 }
@@ -196,7 +223,7 @@ func passwordLogin(c *http.Client, username, password string) error {
 	}
 	if strings.Contains(finalURL, "reAuthCheck") || strings.Contains(finalURL, "isMultifactor") {
 		fmt.Println("账号需要二次验证，正在进入二次验证流程...")
-		return completeMFA(c, string(postBody), username)
+		return completeMFA(c, string(postBody))
 	}
 	return nil
 }
@@ -212,9 +239,14 @@ func extractReAuthParam(html, key string) string {
 }
 
 // completeMFA 完成二次验证（使用手机短信验证码，reAuthType=3）。
-func completeMFA(c *http.Client, mfaHTML, username string) error {
+// 账号从二次验证页的 reAuthParams 中解析，扫码/密码登录均可复用。
+func completeMFA(c *http.Client, mfaHTML string) error {
 	reAuthType := "3" // 手机短信验证码
-	fmt.Printf("[mfa] 二次验证方式：手机短信验证码 (reAuthType=%s)\n", reAuthType)
+	username := extractReAuthParam(mfaHTML, "reAuthUserId")
+	if username == "" {
+		return fmt.Errorf("未从二次验证页解析到账号")
+	}
+	fmt.Printf("[mfa] 二次验证方式：手机短信验证码 (reAuthType=%s, user=%s)\n", reAuthType, username)
 
 	// 1. 切换二次验证方式到短信
 	sw := url.Values{}
@@ -227,7 +259,13 @@ func completeMFA(c *http.Client, mfaHTML, username string) error {
 	}
 	fmt.Println("[mfa] 切换方式响应:", string(sb))
 
-	// 2. 触发短信验证码（type 3 = reAuthDynamicCodeType）
+	// 2. 询问是否发送短信验证码（用户可选择不发送）
+	s := ask("是否发送短信验证码到手机进行验证？(y/n，默认 y): ")
+	if strings.ToLower(s) == "n" || strings.ToLower(s) == "no" {
+		return fmt.Errorf("用户取消二次验证，登录未完成")
+	}
+
+	// 3. 触发短信验证码（type 3 = reAuthDynamicCodeType）
 	trigger := url.Values{}
 	trigger.Set("userName", username)
 	trigger.Set("authCodeTypeName", "reAuthDynamicCodeType")
@@ -243,13 +281,14 @@ func completeMFA(c *http.Client, mfaHTML, username string) error {
 		return fmt.Errorf("验证码为空")
 	}
 
-	// 2. 提交验证码（信任此设备 skipTmpReAuth=true，字段与浏览器完全一致）
-	if err := submitMFA(c, code, "true"); err != nil {
+	// 4. 提交验证码（skipTmpReAuth=false = 仅本次登录。
+	//    实测：false 才能完成登录直达教务系统；true（信任此设备）会让 /login 又跳回二次验证页。）
+	if err := submitMFA(c, code, "false"); err != nil {
 		return err
 	}
 
-	// 3. 完成后 GET /login 完成登录
-	_, _, finalURL, _, err := doGet(c, casBase+"/login?service="+serviceParam)
+	// 5. 完成后 GET /login 完成登录
+	_, status3, finalURL, _, err := doGet(c, casBase+"/login?service="+serviceParam)
 	if err != nil {
 		if strings.Contains(err.Error(), "redirect") {
 			fmt.Println("[mfa] 重定向链较长（属正常）:", err)
@@ -257,7 +296,8 @@ func completeMFA(c *http.Client, mfaHTML, username string) error {
 			return err
 		}
 	}
-	fmt.Println("[mfa] 二次验证完成, 最终跳转:", finalURL)
+	fmt.Printf("[mfa] /login 状态=%d 最终跳转=%s 又触发二次验证=%v\n",
+		status3, finalURL, strings.Contains(finalURL, "reAuthCheck") || strings.Contains(finalURL, "isMultifactor"))
 	return nil
 }
 
@@ -274,11 +314,14 @@ func submitMFA(c *http.Client, code, skipTmpReAuth string) error {
 	form.Set("answer2", "")
 	form.Set("otpCode", "")
 	form.Set("skipTmpReAuth", skipTmpReAuth)
-	body, status, _, _, err := doPostForm(c, casBase+"/reAuthCheck/reAuthSubmit.do", form)
+	body, status, _, hdr, err := doPostForm(c, casBase+"/reAuthCheck/reAuthSubmit.do", form)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("[mfa] 提交响应(status=%d): %s\n", status, string(body))
+	if sc := hdr.Get("Set-Cookie"); sc != "" {
+		fmt.Println("[mfa] 提交 Set-Cookie:", sc)
+	}
 	if strings.Contains(string(body), "reAuth_failed") || strings.Contains(string(body), "reAuth_unauthorized") {
 		return fmt.Errorf("二次验证失败：%s", string(body))
 	}

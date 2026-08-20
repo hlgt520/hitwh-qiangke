@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,7 +27,10 @@ var (
 
 	qrCacheMu sync.Mutex
 	qrCache   = map[string][]byte{}
-	qrExec    = map[string]string{}
+
+	// Web 界面二次验证：扫码确认后若触发 MFA，先暂存验证页，等用户通过前端提交验证码。
+	webPendingMFAMu sync.Mutex
+	webPendingMFA   []byte
 )
 
 type grabState struct {
@@ -121,11 +125,6 @@ func handleLoginQR(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "获取二维码失败: "+err.Error())
 		return
 	}
-	execution, err := getLoginExecution(webClient)
-	if err != nil {
-		writeErr(w, 500, "获取登录页失败: "+err.Error())
-		return
-	}
 	png, err := getQRCodePNG(webClient, uuid)
 	if err != nil {
 		writeErr(w, 500, "生成二维码失败: "+err.Error())
@@ -133,7 +132,6 @@ func handleLoginQR(w http.ResponseWriter, r *http.Request) {
 	}
 	qrCacheMu.Lock()
 	qrCache[uuid] = png
-	qrExec[uuid] = execution
 	qrCacheMu.Unlock()
 	writeJSON(w, map[string]string{"uuid": uuid})
 }
@@ -179,13 +177,20 @@ func handleLoginConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	qrCacheMu.Lock()
-	execution := qrExec[req.Uuid]
+	_, hasQR := qrCache[req.Uuid]
 	qrCacheMu.Unlock()
-	if execution == "" {
+	if !hasQR {
 		writeErr(w, 400, "二维码状态异常，请重新生成")
 		return
 	}
-	if err := doCASLogin(webClient, req.Uuid, execution); err != nil {
+	if err := doCASLogin(webClient, req.Uuid); err != nil {
+		if err == errMFARequired {
+			webPendingMFAMu.Lock()
+			webPendingMFA = append([]byte(nil), lastMFAPage...)
+			webPendingMFAMu.Unlock()
+			writeJSON(w, map[string]string{"status": "mfa_required"})
+			return
+		}
 		writeErr(w, 500, "登录失败: "+err.Error())
 		return
 	}
@@ -195,6 +200,78 @@ func handleLoginConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	setLoggedIn(true)
 	resetKeepalive() // 登录成功后清除之前的"会话失效"告警状态
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// handleMFASend 二次验证：切换短信方式并发送验证码（Web 界面用）。
+func handleMFASend(w http.ResponseWriter, r *http.Request) {
+	webPendingMFAMu.Lock()
+	mfa := webPendingMFA
+	webPendingMFAMu.Unlock()
+	if mfa == nil {
+		writeErr(w, 400, "没有待处理的二次验证，请先重新扫码登录")
+		return
+	}
+	username := extractReAuthParam(string(mfa), "reAuthUserId")
+	if username == "" {
+		writeErr(w, 500, "无法从验证页解析账号")
+		return
+	}
+	sw := url.Values{}
+	sw.Set("isMultifactor", "true")
+	sw.Set("reAuthType", "3")
+	sw.Set("service", serviceRaw)
+	if _, _, _, _, err := doPostForm(webClient, casBase+"/reAuthCheck/changeReAuthType.do", sw); err != nil {
+		writeErr(w, 500, "切换验证方式失败: "+err.Error())
+		return
+	}
+	trigger := url.Values{}
+	trigger.Set("userName", username)
+	trigger.Set("authCodeTypeName", "reAuthDynamicCodeType")
+	tb, status, _, _, err := doPostForm(webClient, casBase+"/dynamicCode/getDynamicCodeByReauth.do", trigger)
+	if err != nil {
+		writeErr(w, 500, "发送验证码失败: "+err.Error())
+		return
+	}
+	writeJSON(w, map[string]interface{}{"ok": true, "status": status, "resp": string(tb)})
+}
+
+// handleMFASubmit 二次验证：提交验证码并完成登录（Web 界面用）。
+func handleMFASubmit(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
+		writeErr(w, 400, "验证码为空")
+		return
+	}
+	webPendingMFAMu.Lock()
+	has := webPendingMFA != nil
+	webPendingMFAMu.Unlock()
+	if !has {
+		writeErr(w, 400, "没有待处理的二次验证，请先重新扫码登录")
+		return
+	}
+	if err := submitMFA(webClient, req.Code, "false"); err != nil {
+		writeErr(w, 500, "二次验证失败: "+err.Error())
+		return
+	}
+	_, _, _, _, err := doGet(webClient, casBase+"/login?service="+serviceParam)
+	if err != nil {
+		if !strings.Contains(err.Error(), "redirect") {
+			writeErr(w, 500, "完成登录失败: "+err.Error())
+			return
+		}
+	}
+	if err := saveCookies(webClient, "cookie.json"); err != nil {
+		writeErr(w, 500, "保存会话失败: "+err.Error())
+		return
+	}
+	webPendingMFAMu.Lock()
+	webPendingMFA = nil
+	webPendingMFAMu.Unlock()
+	setLoggedIn(true)
+	resetKeepalive()
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -528,6 +605,8 @@ func runWeb() {
 	mux.HandleFunc("/api/login/qr.png", handleLoginQRImage)
 	mux.HandleFunc("/api/login/status", handleLoginStatus)
 	mux.HandleFunc("/api/login/confirm", handleLoginConfirm)
+	mux.HandleFunc("/api/mfa/send", handleMFASend)
+	mux.HandleFunc("/api/mfa/submit", handleMFASubmit)
 	mux.HandleFunc("/api/logout", handleLogout)
 	mux.HandleFunc("/api/course-types", handleCourseTypes)
 	mux.HandleFunc("/api/semesters", handleSemesters)

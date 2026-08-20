@@ -74,6 +74,14 @@
         <img id="qr-img" src="" alt="二维码">
         <div id="qr-status" class="qr-status">等待扫码...</div>
       </div>
+      <div id="mfa-box" style="display:none;margin-top:10px;border:1px solid var(--border);border-radius:8px;padding:12px;background:#fff8e6">
+        <div id="mfa-status" style="margin-bottom:8px;color:#8a6d00">账号需要二次验证</div>
+        <div class="row">
+          <button id="mfa-send-btn" class="btn btn-primary">发送短信验证码</button>
+          <input id="mfa-code" type="text" placeholder="输入验证码" style="width:140px">
+          <button id="mfa-submit-btn" class="btn" disabled>确认</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -217,7 +225,12 @@ $('login-btn').onclick = async () => {
         else if (st.status === 'confirmed') {
           clearInterval(qrTimer);
           $('qr-status').textContent = '扫码成功，正在登录...';
-          await api('/api/login/confirm', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({uuid:d.uuid})});
+          const resp = await api('/api/login/confirm', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({uuid:d.uuid})});
+          if (resp.status === 'mfa_required') {
+            $('mfa-box').style.display = '';
+            $('mfa-status').textContent = '账号需要二次验证：请点击「发送短信验证码」，收到后输入验证码并确认';
+            return;
+          }
           $('qr-box').style.display = 'none';
           setBadge(true);
           $('qr-status').textContent = '登录成功 ✅';
@@ -236,6 +249,35 @@ $('logout-btn').onclick = async () => {
   await api('/api/logout', {method:'POST'});
   setBadge(false);
   $('course-tbody').innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center">请先登录</td></tr>';
+};
+
+// —— 二次验证（MFA）——
+$('mfa-send-btn').onclick = async () => {
+  $('mfa-send-btn').disabled = true;
+  try {
+    const r = await api('/api/mfa/send', {method:'POST'});
+    $('mfa-status').textContent = '验证码已发送到手机，请查收后输入';
+    $('mfa-submit-btn').disabled = false;
+  } catch(e) {
+    $('mfa-status').textContent = '发送失败: ' + e.message;
+  }
+  $('mfa-send-btn').disabled = false;
+};
+$('mfa-submit-btn').onclick = async () => {
+  const code = $('mfa-code').value.trim();
+  if (!code) { $('mfa-status').textContent = '请输入验证码'; return; }
+  $('mfa-submit-btn').disabled = true;
+  try {
+    await api('/api/mfa/submit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code})});
+    $('mfa-box').style.display = 'none';
+    $('qr-box').style.display = 'none';
+    setBadge(true);
+    $('qr-status').textContent = '登录成功 ✅';
+    loadCourseTypes(); loadSemesters();
+  } catch(e) {
+    $('mfa-status').textContent = '验证失败: ' + e.message;
+    $('mfa-submit-btn').disabled = false;
+  }
 };
 
 // 关闭标签页/刷新页面时尽力登出（keepalive:true 允许请求在页面关闭瞬间发出）。
