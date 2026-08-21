@@ -47,6 +47,10 @@ func newClient() *http.Client {
 		Jar:     jar,
 		Timeout: 30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// 记录重定向链每一跳的 Set-Cookie，避免中间跳转设置的会话 cookie 丢失
+			if req.Response != nil {
+				recordCookies(req.Response)
+			}
 			if len(via) >= 30 {
 				return fmt.Errorf("too many redirects (%d)", len(via))
 			}
@@ -175,7 +179,44 @@ func doPostForm(c *http.Client, u string, form url.Values) (body []byte, status 
 }
 
 func saveCookies(c *http.Client, file string) error {
-	data, err := json.MarshalIndent(collectAllCookies(), "", "  ")
+	// 合并 cookieMeta（含重定向链记录）与 Jar 实际 cookie，并补回 Domain/Path，
+	// 确保 ids 与 jwts 的会话 cookie 都能完整落盘、可跨进程复用。
+	var all []*http.Cookie
+	seen := map[string]bool{}
+	add := func(ck *http.Cookie) {
+		key := ck.Name + "|" + ck.Domain + "|" + ck.Path
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		all = append(all, ck)
+	}
+	for _, ck := range collectAllCookies() {
+		add(ck)
+	}
+	jar, _ := c.Jar.(*cookiejar.Jar)
+	if jar != nil {
+		for _, u := range []string{
+			"https://ids.hit.edu.cn/authserver",
+			"https://ids.hit.edu.cn/",
+			"http://jwts.hitwh.edu.cn/",
+		} {
+			pu, _ := url.Parse(u)
+			for _, ck := range jar.Cookies(pu) {
+				if ck.Domain == "" {
+					ck.Domain = pu.Hostname()
+				}
+				if ck.Path == "" {
+					ck.Path = "/"
+				}
+				add(ck)
+			}
+		}
+	}
+	if len(all) == 0 {
+		all = collectAllCookies()
+	}
+	data, err := json.MarshalIndent(all, "", "  ")
 	if err != nil {
 		return err
 	}
