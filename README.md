@@ -1,22 +1,23 @@
 # qiangke —— HITWH 抢课脚本（Go）
 
-针对 `jwts.hitwh.edu.cn`（青果教务系统）的高速抢课工具，校园网直连。
+针对 `jwts.hitwh.edu.cn`（教务系统）的高速抢课工具，校园网直连。
 
-## 已验证（2026-08 实测，用真实课表全链路打通）
+## 快捷使用方法
 
-- ✅ 扫码登录链路：CAS（ids.hit.edu.cn）二维码 → 教务系统建立会话
-- ✅ 校园网直连 `jwts.hitwh.edu.cn`（无需 WebVPN）
-- ✅ 课表查询：`queryXsxkList` 需**先取 token+pageCount，再带两者查询**才返回课程（脚本已自动处理）
-- ✅ 课程解析：正确提取 `rwh`（完整任务号，形如 `2026-2027-1-22WHAE43002-001`）与课程名
-- ✅ 提交 `saveXsxk`：token + rwh 格式被服务器接受（选课未开放时返回「学生未注册」，开放后即「选课成功」）
-- ✅ cookie 持久化/复用（会话可跨进程复用）
-- ⚠️ token **单次有效**（每次请求都变，不能复用 → 串行「取 token→提交」）
+### 1.打开网址'https://github.com/hlgt520/hitwh-qiangke'从realse中下载最新压缩包
 
-> 说明：页面常驻「学生未进行注册，不可选课！」提示，含义是**选课尚未开放**；课表仍可正常查看，等选课开放、完成注册后提交即生效。
+### 2.解压缩之后，双击qiangke.exe，等待自动跳转至http://127.0.0.1:8080，扫码登陆即可使用（首次登录可能会触发二次验证，点击发送短信验证码，输入验证码即可使用）
+
+### 3.目前仅限校园网环境，且必须是哈工大APP扫码登录才可使用。
+
+## 免责声明
+
+仅供学习交流，抢课后果自负；请遵守学校选课规则。
+
+
+
 
 ## 环境配置（从源码构建）
-
-本工具是 Go 程序，构建/运行**只需安装 Go**，无其他运行时依赖。仓库里已附带编译好的 `qiangke.exe`，若只想直接用可跳过本节。
 
 ### 1. 安装 Go
 
@@ -28,15 +29,26 @@
 go version
 ```
 
-### 2. 配置国内模块代理（重要）
+### 2. 从 GitHub 拉取（可选）
 
-默认的 `proxy.golang.org` 在国内经常连不上，**必须先换成国内镜像**：
+```bash
+git clone https://github.com/hlgt520/hitwh-qiangke.git
+cd hitwh-qiangke
+```
+
+或者直接在https://github.com/hlgt520/hitwh-qiangke中打包源码
+
+```bash
+cd hitwh-qiangke
+```
+
+### 3. 配置国内模块代理
 
 ```bash
 go env -w GOPROXY=https://goproxy.cn,direct
 ```
 
-### 3. 拉取依赖并构建
+### 4. 拉取依赖并构建
 
 ```bash
 cd qiangke
@@ -48,13 +60,6 @@ go build -o qiangke.exe .   # 编译成单文件 exe
 
 > 依赖说明：仅 `golang.org/x/net`（用于 GBK/GB2312 网页解码），其余全是 Go 标准库；`go.sum` 已锁定依赖版本。
 
-### 4. 从 GitHub 拉取（可选）
-
-```bash
-git clone https://github.com/hlgt520/hitwh-qiangke.git
-cd hitwh-qiangke
-# 然后按上面 2、3 步配置代理并构建
-```
 
 ## 设计要点（防冻结）
 
